@@ -7,7 +7,6 @@ from pathlib import Path
 import yaml
 from faster_whisper import WhisperModel
 
-# ====================== НАСТРОЙКА ЛОГГЕРА ======================
 def setup_logger(config: dict):
     log_level = getattr(logging, config["log_level"].upper())
     logger = logging.getLogger("whisper_processor")
@@ -17,13 +16,13 @@ def setup_logger(config: dict):
         "%(asctime)s | %(levelname)-8s | %(filename)s:%(lineno)d | %(message)s"
     )
 
-    # Консоль
+    # Консоль (исправлено для Windows — без спецсимволов)
     ch = logging.StreamHandler()
     ch.setLevel(log_level)
     ch.setFormatter(formatter)
     logger.addHandler(ch)
 
-    # Файл
+    # Файл лога
     log_file = config.get("log_file")
     if log_file:
         log_dir = Path(log_file).parent
@@ -32,6 +31,7 @@ def setup_logger(config: dict):
             log_file,
             maxBytes=config.get("log_max_bytes", 10 * 1024 * 1024),
             backupCount=config.get("log_backup_count", 5),
+            encoding="utf-8",  # важно для Windows
         )
         fh.setLevel(log_level)
         fh.setFormatter(formatter)
@@ -40,7 +40,6 @@ def setup_logger(config: dict):
     return logger
 
 
-# ====================== ОСНОВНОЙ КОД ======================
 def main():
     with open("config.yaml", encoding="utf-8") as f:
         config = yaml.safe_load(f)
@@ -57,7 +56,7 @@ def main():
     if failed_dir:
         failed_dir.mkdir(parents=True, exist_ok=True)
 
-    extensions = tuple(config["supported_extensions"])
+    extensions = tuple(ext.lower() for ext in config["supported_extensions"])
 
     logger.info("Загрузка модели faster-whisper...")
     try:
@@ -65,24 +64,22 @@ def main():
             config["model_size"],
             device=config["device"],
             compute_type=config["compute_type"],
-            # download_root="./models"  # Раскомментируйте, если хотите кэшировать модели локально
+            # download_root="./models"  # раскомментируй, если хочешь кэшировать локально
         )
-        logger.info(f"Модель {config['model_size']} загружена на {config['device'].upper()} с {config['compute_type']}")
+        logger.info(f"Модель {config['model_size']} загружена на {config['device'].upper()} ({config['compute_type']})")
     except Exception as e:
         logger.critical(f"Не удалось загрузить модель: {e}")
         return
 
-    logger.info("Faster-Whisper-процессор запущен. Ожидаю файлы...")
+    logger.info("Faster-Whisper процессор запущен. Ожидаю файлы в ./input...")
 
     transcribe_options = {
         "language": config["language"],
         "task": "translate" if config["translate"] else "transcribe",
         "beam_size": config["beam_size"],
-        "best_of": config["best_of"],
-        "patience": config["patience"],
         "temperature": tuple(config["temperature"]),
         "compression_ratio_threshold": config["compression_ratio_threshold"],
-        "logprob_threshold": config["logprob_threshold"],
+        "log_prob_threshold": config["logprob_threshold"],       # правильное имя
         "no_speech_threshold": config["no_speech_threshold"],
         "condition_on_previous_text": config["condition_on_previous_text"],
         "initial_prompt": config["initial_prompt"],
@@ -108,17 +105,17 @@ def main():
             logger.info(f"Обнаружен файл: {file_path.name}")
 
             try:
-                logger.info(f"Транскрибция → {file_path.name}")
+                logger.info(f"Транскрибция -> {file_path.name}")
                 segments, info = model.transcribe(str(file_path), **transcribe_options)
 
-                # Сохранение простого .txt (полный текст без таймстампов)
-                text = " ".join(segment.text.strip() for segment in segments)
+                # Собираем чистый текст
+                text = " ".join(segment.text.strip() for segment in segments).strip()
+
                 output_path = output_dir / f"{file_path.stem}.txt"
-                output_path.write_text(text.strip(), encoding="utf-8")
+                output_path.write_text(text, encoding="utf-8")
 
-                logger.info(f"Успех → {output_path.name}")
+                logger.info(f"Успех -> {output_path.name}")
 
-                # Удаление исходника
                 if config["delete_input_after_process"]:
                     file_path.unlink()
                     logger.debug(f"Исходный файл удалён: {file_path.name}")
@@ -134,7 +131,7 @@ def main():
             logger.info("Получен сигнал остановки. Завершение...")
             break
         except Exception as e:
-            logger.critical(f"Критическая ошибка в основном цикле: {e}", exc_info=True)
+            logger.critical(f"Критическая ошибка в цикле: {e}", exc_info=True)
             time.sleep(10)
 
     logger.info("Работа завершена.")
